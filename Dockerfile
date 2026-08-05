@@ -32,10 +32,12 @@ COPY --from=build_node_modules /app/wgpw.sh /bin/wgpw
 RUN chmod +x /bin/wgpw
 
 # Install Linux packages
+# ip6tables is a separate package in Alpine 3.19+
 RUN apk add --no-cache \
     dpkg \
     dumb-init \
     iptables \
+    ip6tables \
     nodejs \
     npm
 
