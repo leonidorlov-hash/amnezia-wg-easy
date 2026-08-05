@@ -18,6 +18,7 @@ const {
   WG_MTU,
   WG_DEFAULT_DNS,
   WG_DEFAULT_ADDRESS,
+  WG_DEFAULT_ADDRESS6,
   WG_PERSISTENT_KEEPALIVE,
   WG_ALLOWED_IPS,
   WG_PRE_UP,
@@ -78,6 +79,20 @@ module.exports = class WireGuard {
         debug('Configuration generated.');
       }
 
+      // IPv6 support: derive server and client v6 addresses from WG_DEFAULT_ADDRESS6.
+      // Runs on every load, so existing deployments are migrated automatically.
+      if (WG_DEFAULT_ADDRESS6) {
+        if (!config.server.address6) {
+          config.server.address6 = WG_DEFAULT_ADDRESS6.replace('x', '1');
+        }
+        for (const client of Object.values(config.clients)) {
+          if (!client.address6 && client.address) {
+            const lastOctet = parseInt(client.address.split('.')[3], 10);
+            client.address6 = WG_DEFAULT_ADDRESS6.replace('x', lastOctet.toString(16));
+          }
+        }
+      }
+
       return config;
     });
 
@@ -121,7 +136,7 @@ module.exports = class WireGuard {
 # Server
 [Interface]
 PrivateKey = ${config.server.privateKey}
-Address = ${config.server.address}/24
+Address = ${config.server.address}/24${config.server.address6 ? `, ${config.server.address6}/64` : ''}
 ListenPort = ${WG_PORT}
 PreUp = ${WG_PRE_UP}
 PostUp = ${WG_POST_UP}
@@ -147,7 +162,7 @@ H4 = ${config.server.h4}
 [Peer]
 PublicKey = ${client.publicKey}
 ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
-}AllowedIPs = ${client.address}/32`;
+}AllowedIPs = ${client.address}/32${client.address6 ? `, ${client.address6}/128` : ''}`;
     }
 
     debug('Config saving...');
@@ -242,7 +257,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
     return `
 [Interface]
 PrivateKey = ${client.privateKey ? `${client.privateKey}` : 'REPLACE_ME'}
-Address = ${client.address}/24
+Address = ${client.address}/24${client.address6 ? `, ${client.address6}/64` : ''}
 ${WG_DEFAULT_DNS ? `DNS = ${WG_DEFAULT_DNS}\n` : ''}\
 ${WG_MTU ? `MTU = ${WG_MTU}\n` : ''}\
 Jc = ${config.server.jc}
@@ -315,6 +330,10 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
       expiredAt: null,
       enabled: true,
     };
+    // Assign matching IPv6 address when WG_DEFAULT_ADDRESS6 is set
+    if (WG_DEFAULT_ADDRESS6) {
+      client.address6 = WG_DEFAULT_ADDRESS6.replace('x', parseInt(address.split('.')[3], 10).toString(16));
+    }
     if (expiredDate) {
       client.expiredAt = new Date(expiredDate);
       client.expiredAt.setHours(23);
@@ -389,6 +408,9 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     }
 
     client.address = address;
+    if (WG_DEFAULT_ADDRESS6) {
+      client.address6 = WG_DEFAULT_ADDRESS6.replace('x', parseInt(address.split('.')[3], 10).toString(16));
+    }
     client.updatedAt = new Date();
 
     await this.saveConfig();
@@ -418,6 +440,18 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
   async restoreConfiguration(config) {
     debug('Starting configuration restore process.');
     const _config = JSON.parse(config);
+    // Migrate restored configs lacking IPv6 addresses
+    if (WG_DEFAULT_ADDRESS6) {
+      if (!_config.server.address6) {
+        _config.server.address6 = WG_DEFAULT_ADDRESS6.replace('x', '1');
+      }
+      for (const client of Object.values(_config.clients || {})) {
+        if (!client.address6 && client.address) {
+          const lastOctet = parseInt(client.address.split('.')[3], 10);
+          client.address6 = WG_DEFAULT_ADDRESS6.replace('x', lastOctet.toString(16));
+        }
+      }
+    }
     await this.__saveConfig(_config);
     await this.__reloadConfig();
     debug('Configuration restore process completed.');
@@ -455,7 +489,6 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     if (WG_ENABLE_ONE_TIME_LINKS === 'true') {
       for (const client of Object.values(config.clients)) {
         if (client.oneTimeLink !== null && new Date() > new Date(client.oneTimeLinkExpiresAt)) {
-          debug(`Client ${client.id} One Time Link expired.`);
           needSaveConfig = true;
           client.oneTimeLink = null;
           client.oneTimeLinkExpiresAt = null;
